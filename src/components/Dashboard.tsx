@@ -616,24 +616,6 @@ function FarmHistory({ history }: { history: SensorHistory[] }) {
           </h2>
           <div className="flex items-center gap-2">
             <Button 
-              variant="outline" 
-              size="sm" 
-              disabled={isSyncing}
-              onClick={handleResetAndSync}
-              className="no-print text-red-600 border-red-200 hover:bg-red-50"
-            >
-              {isSyncing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <History className="mr-2 h-4 w-4" />}
-              Reset & Sync
-            </Button>
-            <Button 
-              variant="outline" 
-              size="sm" 
-              onClick={() => generateSimulatedHistory(farmId)}
-              className="no-print text-emerald-600 border-emerald-200 hover:bg-emerald-50"
-            >
-              <Upload className="mr-2 h-4 w-4" /> Quick Sync
-            </Button>
-            <Button 
               variant="ghost" 
               size="sm" 
               onClick={handlePrint}
