@@ -1,0 +1,5 @@
+{
+  "name": "QuailSmart",
+  "description": "A real-time IoT dashboard for monitoring and controlling a backyard quail farm, featuring sensor data visualization, device management, and automation settings.",
+  "requestFramePermissions": []
+}

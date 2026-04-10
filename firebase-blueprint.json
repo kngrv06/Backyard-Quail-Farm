@@ -1,0 +1,81 @@
+{
+  "entities": {
+    "FarmState": {
+      "title": "Farm State",
+      "description": "Current real-time state of the farm sensors and controls.",
+      "type": "object",
+      "properties": {
+        "temperature": { "type": "number", "description": "Current temperature in Celsius" },
+        "humidity": { "type": "number", "description": "Current humidity percentage" },
+        "ammonia": { "type": "number", "description": "Current ammonia level (raw or ppm)" },
+        "feedLevel": { "type": "number", "description": "Current feed level percentage" },
+        "lastUpdate": { "type": "string", "format": "date-time", "description": "Timestamp of last sensor update" },
+        "controls": {
+          "type": "object",
+          "properties": {
+            "fan": { "type": "boolean" },
+            "heater": { "type": "boolean" },
+            "light": { "type": "boolean" },
+            "cleaner": { "type": "boolean" },
+            "feed": { "type": "boolean" }
+          }
+        },
+        "autoMode": { "type": "boolean", "description": "Whether automation is enabled" }
+      },
+      "required": ["temperature", "humidity", "ammonia", "feedLevel", "controls", "autoMode"]
+    },
+    "AutomationSettings": {
+      "title": "Automation Settings",
+      "description": "Schedules for automated tasks.",
+      "type": "object",
+      "properties": {
+        "feedSchedule": {
+          "type": "object",
+          "properties": {
+            "time": { "type": "string" },
+            "duration": { "type": "number" }
+          }
+        },
+        "cleanerSchedule": {
+          "type": "object",
+          "properties": {
+            "time": { "type": "string" },
+            "duration": { "type": "number" }
+          }
+        },
+        "lightSchedule": {
+          "type": "object",
+          "properties": {
+            "start": { "type": "string" },
+            "end": { "type": "string" }
+          }
+        }
+      }
+    },
+    "SensorHistory": {
+      "title": "Sensor History",
+      "description": "Historical sensor readings.",
+      "type": "object",
+      "properties": {
+        "timestamp": { "type": "string", "format": "date-time" },
+        "temperature": { "type": "number" },
+        "humidity": { "type": "number" },
+        "ammonia": { "type": "number" }
+      }
+    }
+  },
+  "firestore": {
+    "/farms/{farmId}": {
+      "schema": "FarmState",
+      "description": "Main farm state document"
+    },
+    "/farms/{farmId}/settings/automation": {
+      "schema": "AutomationSettings",
+      "description": "Automation schedules"
+    },
+    "/farms/{farmId}/history/{historyId}": {
+      "schema": "SensorHistory",
+      "description": "Historical sensor data points"
+    }
+  }
+}
