@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { doc, onSnapshot, updateDoc, getDoc, collection, query, orderBy, limit, writeBatch, addDoc } from 'firebase/firestore';
+import React, { useState, useEffect, useRef } from 'react';
+import { doc, onSnapshot, updateDoc, getDoc, collection, query, orderBy, limit, writeBatch, addDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { FarmState, AutomationSettings, SensorHistory, OperationType, handleFirestoreError, FarmControls } from '../types';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card';
@@ -31,7 +31,7 @@ const CONTROL_CONFIG = [
   { key: 'heater', label: 'Heater System', icon: Flame, color: 'text-orange-500' },
   { key: 'light', label: 'Farm Lighting', icon: Sun, color: 'text-yellow-500' },
   { key: 'cleaner', label: 'Waste Cleaner', icon: Sparkles, color: 'text-purple-500' },
-  { key: 'feed', label: 'Auto Feeder', icon: Utensils, color: 'text-emerald-500' },
+  { key: 'feed', label: 'Feed', icon: Utensils, color: 'text-emerald-500' },
 ] as const;
 
 interface DashboardProps {
@@ -47,6 +47,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
   const [isAuthReady, setIsAuthReady] = useState(false);
 
   const farmId = "main-farm";
+  const lastLoggedHour = useRef<string | null>(null);
 
   useEffect(() => {
     if (user) {
@@ -123,6 +124,45 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
     }
   }, [history.length, isAuthReady, farmId]);
 
+  // Automated Hourly Logging logic
+  useEffect(() => {
+    if (!isAuthReady || !farmState) return;
+
+    const logCurrentHour = async () => {
+      const now = new Date();
+      const hourId = format(now, 'yyyy-MM-dd_HH');
+      
+      // I-check kung na-save na natin ang oras na ito
+      if (lastLoggedHour.current === hourId) return;
+
+      const docPath = `farms/${farmId}/history/hourly_${hourId}`;
+      const docRef = doc(db, docPath);
+      
+      try {
+        const docSnap = await getDoc(docRef);
+        lastLoggedHour.current = hourId;
+        
+        if (!docSnap.exists()) {
+          console.log(`[QuailSmart] Awtomatikong sine-save ang snapshot para sa ${hourId}`);
+          await setDoc(docRef, {
+            timestamp: now.toISOString(),
+            temperature: Number(farmState.temperature.toFixed(2)),
+            humidity: Number(farmState.humidity.toFixed(2)),
+            ammonia: Number(farmState.ammonia.toFixed(2))
+          });
+        }
+      } catch (error) {
+        console.error("Error logging hourly data:", error);
+      }
+    };
+
+    logCurrentHour();
+    // I-double check bawat 10 minuto kung kailangan na mag-log ng bagong oras
+    const interval = setInterval(logCurrentHour, 10 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [isAuthReady, farmId, farmState?.temperature]); // Re-run if essential stats change to ensure we have fresh data
+
+
   const toggleControl = async (key: keyof FarmState['controls']) => {
     if (!farmState) return;
     try {
@@ -153,6 +193,25 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       await updateDoc(settingsDoc, newSettings);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `farms/${farmId}/settings/automation`);
+    }
+  };
+
+  const logManualReading = async () => {
+    if (!farmState) return;
+    const now = new Date();
+    const docId = `manual_${now.getTime()}`;
+    const docRef = doc(db, `farms/${farmId}/history/${docId}`);
+    
+    try {
+      await setDoc(docRef, {
+        timestamp: now.toISOString(),
+        temperature: Number(farmState.temperature.toFixed(1)),
+        humidity: Number(farmState.humidity.toFixed(1)),
+        ammonia: Number(farmState.ammonia.toFixed(2))
+      });
+      console.log("[ManualLog] Snapshot saved.");
+    } catch (error) {
+      console.error("Error saving manual log:", error);
     }
   };
 
@@ -235,6 +294,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
           title="Ammonia (AMM)" 
           value={farmState.ammonia} 
           unit="" 
+          precision={0}
           icon={<Wind className="h-5 w-5" />} 
           status={
             farmState.ammonia > 1500 ? 'Critical' :
@@ -246,9 +306,10 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
           title="Feed Level" 
           value={farmState.feedLevel} 
           unit="%" 
+          precision={0}
           icon={<Database className="h-5 w-5" />} 
           status={
-            farmState.feedLevel < 10 ? 'Critical' :
+            farmState.feedLevel <= 10 ? 'Critical' :
             farmState.feedLevel <= 20 ? 'Warning' :
             'Optimal'
           }
@@ -404,7 +465,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
   );
 }
 
-function SensorCard({ title, value, unit, icon, status }: { title: string; value: number; unit: string; icon: React.ReactNode; status: string }) {
+function SensorCard({ title, value, unit, icon, status, precision = 2 }: { title: string; value: number; unit: string; icon: React.ReactNode; status: string; precision?: number }) {
   const statusColor = status === 'Optimal' ? 'text-green-600' : status === 'Warning' ? 'text-amber-600' : 'text-red-600';
   return (
     <Card className="border-stone-200 shadow-sm transition-all hover:shadow-md">
@@ -416,7 +477,7 @@ function SensorCard({ title, value, unit, icon, status }: { title: string; value
         <div className="mt-4">
           <p className="text-xs font-bold uppercase tracking-wider text-stone-400">{title}</p>
           <div className="flex items-baseline gap-1">
-            <span className={`text-3xl font-bold ${statusColor}`}>{value}</span>
+            <span className={`text-3xl font-bold ${statusColor}`}>{value.toFixed(precision)}</span>
             <span className="text-lg font-medium text-stone-500">{unit}</span>
           </div>
         </div>
@@ -495,78 +556,95 @@ function AutomationCard({ title, settings, isRange, onSave }: { title: string; s
 }
 
 function FarmHistory({ history }: { history: SensorHistory[] }) {
+  const [selectedDay, setSelectedDay] = useState<string | null>(format(new Date(), 'yyyy-MM-dd'));
+  const [reportDates, setReportDates] = useState<string[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
   const farmId = "main-farm";
 
+  const toggleReportDate = (day: string) => {
+    setReportDates(prev => 
+      prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day]
+    );
+  };
+
   const handlePrint = () => {
+    const datesToProcess = reportDates.length > 0 ? reportDates : (selectedDay ? [selectedDay] : []);
+    
+    if (datesToProcess.length === 0) {
+      alert("Please select at least one date for the report.");
+      return;
+    }
+
     const doc = new jsPDF();
-    
-    // Add Title
-    doc.setFontSize(20);
-    doc.setTextColor(5, 150, 105); // emerald-600
-    doc.text('Backyard Quail Farm - Sensor Report', 14, 22);
-    
-    doc.setFontSize(10);
-    doc.setTextColor(100);
-    doc.text(`Generated on: ${safeFormat(new Date().toISOString(), 'PPpp')}`, 14, 30);
-    
-    let currentY = 40;
+    let firstPage = true;
 
-    // Sort days to print chronologically
-    const daysToPrint = [...sortedDays].sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+    // Header Helper
+    const addHeader = (day?: string) => {
+      doc.setFillColor(5, 150, 105);
+      doc.rect(0, 0, 210, 35, 'F');
+      doc.setTextColor(255);
+      doc.setFontSize(20);
+      doc.text('QuailSmart Batch Report', 14, 22);
+      
+      doc.setFontSize(10);
+      doc.text(`Generated: ${safeFormat(new Date().toISOString(), 'PPpp')}`, 14, 30);
+      if (day) {
+        doc.text(`Record Date: ${safeFormat(day, 'MMMM dd, yyyy')}`, 140, 30);
+      }
+    };
 
-    daysToPrint.forEach((day, index) => {
+    datesToProcess.sort().forEach((day) => {
+      if (!dailyLogs[day]) return;
+
+      if (!firstPage) doc.addPage();
+      firstPage = false;
+
+      addHeader(day);
+      let currentY = 45;
+
       const logs = dailyLogs[day];
       const uniqueLogs = Array.from(new Map(logs.map(l => [l.timestamp, l])).values())
         .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
-      if (uniqueLogs.length === 0) return;
+      if (uniqueLogs.length > 0) {
+        // Calculate Averages for the day
+        const avgTemp = uniqueLogs.reduce((sum, l) => sum + l.temperature, 0) / uniqueLogs.length;
+        const avgHum = uniqueLogs.reduce((sum, l) => sum + l.humidity, 0) / uniqueLogs.length;
+        const avgAmm = uniqueLogs.reduce((sum, l) => sum + l.ammonia, 0) / uniqueLogs.length;
 
-      // Add a new page if not the first day
-      if (index > 0) {
-        doc.addPage();
-        currentY = 20;
+        doc.setFontSize(12);
+        doc.setTextColor(30);
+        doc.text(`Daily Stats for ${safeFormat(day, 'PP')}`, 14, currentY);
+        currentY += 8;
+
+        doc.setFontSize(10);
+        doc.setTextColor(80);
+        doc.text(`Averages: Temp: ${avgTemp.toFixed(2)}°C | Hum: ${avgHum.toFixed(2)}% | Ammonia: ${avgAmm.toFixed(0)} AMM`, 14, currentY);
+        currentY += 10;
+
+        // Table
+        autoTable(doc, {
+          startY: currentY,
+          head: [['Time', 'Temperature (°C)', 'Humidity (%)', 'Ammonia (AMM)']],
+          body: uniqueLogs.map(log => [
+            safeFormat(log.timestamp, 'hh:mm a'),
+            log.temperature.toFixed(2),
+            log.humidity.toFixed(2),
+            log.ammonia.toFixed(0)
+          ]),
+          headStyles: { fillColor: [5, 150, 105], textColor: 255 },
+          alternateRowStyles: { fillColor: [245, 245, 245] },
+          margin: { left: 14, right: 14 },
+          theme: 'striped'
+        });
       }
-
-      // Day Header
-      doc.setFontSize(14);
-      doc.setTextColor(30);
-      doc.text(`Date: ${safeFormat(day, 'MMMM dd, yyyy')}`, 14, currentY);
-      currentY += 10;
-
-      // Calculate Averages for the day
-      const avgTemp = uniqueLogs.reduce((sum, l) => sum + l.temperature, 0) / uniqueLogs.length;
-      const avgHum = uniqueLogs.reduce((sum, l) => sum + l.humidity, 0) / uniqueLogs.length;
-      const avgAmm = uniqueLogs.reduce((sum, l) => sum + l.ammonia, 0) / uniqueLogs.length;
-
-      doc.setFontSize(10);
-      doc.setTextColor(80);
-      doc.text(`Daily Averages: Temp: ${avgTemp.toFixed(1)}°C | Hum: ${avgHum.toFixed(1)}% | Ammonia: ${avgAmm.toFixed(0)} AMM`, 14, currentY);
-      currentY += 10;
-
-      // Table
-      autoTable(doc, {
-        startY: currentY,
-        head: [['Time', 'Temperature (°C)', 'Humidity (%)', 'Ammonia (AMM)']],
-        body: uniqueLogs.map(log => [
-          safeFormat(log.timestamp, 'hh:mm a'),
-          log.temperature.toFixed(1),
-          log.humidity.toFixed(1),
-          log.ammonia.toFixed(0)
-        ]),
-        headStyles: { fillColor: [5, 150, 105], textColor: 255 },
-        alternateRowStyles: { fillColor: [245, 245, 245] },
-        margin: { left: 14, right: 14 },
-        theme: 'striped'
-      });
-
-      // Update currentY for next day if needed (though we add page)
-      // @ts-ignore
-      currentY = doc.lastAutoTable.finalY + 20;
     });
 
     // Save the PDF
-    doc.save(`Farm_Report_${safeFormat(new Date().toISOString(), 'yyyy-MM-dd')}.pdf`);
+    const filename = datesToProcess.length === 1 
+      ? `Farm_Report_${datesToProcess[0]}.pdf`
+      : `Farm_Batch_Report_${datesToProcess.length}_days.pdf`;
+    doc.save(filename);
   };
 
   // Group history by day for logs
@@ -578,6 +656,13 @@ function FarmHistory({ history }: { history: SensorHistory[] }) {
   }, {});
 
   const sortedDays = Object.keys(dailyLogs).sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
+
+  // Set initial selected day when data arrives
+  useEffect(() => {
+    if (sortedDays.length > 0 && !selectedDay) {
+      setSelectedDay(sortedDays[0]);
+    }
+  }, [sortedDays, selectedDay]);
 
   const handleResetAndSync = async () => {
     setIsSyncing(true);
@@ -612,23 +697,79 @@ function FarmHistory({ history }: { history: SensorHistory[] }) {
       <div className="print-section space-y-6">
         <div className="flex items-center justify-between">
           <h2 className="text-xl font-bold flex items-center gap-2 text-stone-800">
-            <FileText className="h-6 w-6 text-emerald-600" /> Farm Sensor History
+            <FileText className="h-6 w-6 text-emerald-600" /> Farm History Logs
           </h2>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            <div className="flex gap-2 no-print">
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => setReportDates(sortedDays)}
+                className="text-[10px] uppercase font-bold border-stone-200"
+              >
+                Select All
+              </Button>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => setReportDates([])}
+                className="text-[10px] uppercase font-bold border-stone-200"
+              >
+                Clear
+              </Button>
+            </div>
             <Button 
-              variant="ghost" 
+              variant="default" 
               size="sm" 
               onClick={handlePrint}
-              className="no-print text-stone-500 hover:text-emerald-600"
+              disabled={reportDates.length === 0 && !selectedDay}
+              className="no-print bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm px-4"
             >
-              <Printer className="mr-2 h-4 w-4" /> Print Report
+              <Printer className="mr-2 h-4 w-4" /> 
+              {reportDates.length > 0 ? `Download Report (${reportDates.length} Days)` : 'Download Selected Day'}
             </Button>
           </div>
         </div>
 
+        <div className="no-print bg-stone-50 border border-stone-100 rounded-xl p-4">
+          <p className="text-[10px] font-bold uppercase text-stone-400 mb-3 tracking-widest">Select dates to include in your PDF report:</p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2">
+            {sortedDays.map(day => (
+              <label 
+                key={day} 
+                className={`flex flex-col items-center justify-center p-2 rounded-lg border cursor-pointer transition-all ${
+                  reportDates.includes(day) 
+                    ? 'bg-emerald-600 border-emerald-600 text-white shadow-sm' 
+                    : 'bg-white border-stone-200 text-stone-600 hover:border-emerald-300'
+                }`}
+              >
+                <input 
+                  type="checkbox" 
+                  className="hidden" 
+                  checked={reportDates.includes(day)}
+                  onChange={() => toggleReportDate(day)}
+                />
+                <span className={`text-[10px] font-bold ${reportDates.includes(day) ? 'text-emerald-100' : 'text-stone-400'}`}>
+                  {safeFormat(day, 'MMM')}
+                </span>
+                <span className="text-sm font-bold">
+                  {safeFormat(day, 'dd')}
+                </span>
+                <span className="text-[8px] opacity-80">
+                  {safeFormat(day, 'yyyy')}
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+
         {sortedDays.length > 0 ? (
-          <Tabs defaultValue={sortedDays[0]} className="w-full">
-            <div className="no-print overflow-x-auto pb-4">
+          <Tabs 
+            value={selectedDay || sortedDays[0]} 
+            onValueChange={setSelectedDay}
+            className="w-full"
+          >
+            <div className="no-print overflow-x-auto pb-4 pt-4 border-t border-stone-100 mt-4">
               <TabsList className="flex h-auto w-max gap-2 bg-transparent p-0">
                 {sortedDays.map(day => (
                   <TabsTrigger 
@@ -674,11 +815,11 @@ function FarmHistory({ history }: { history: SensorHistory[] }) {
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                       <div className="text-center space-y-1">
                         <p className="text-[10px] font-bold uppercase text-emerald-600/70 tracking-widest">Temperature</p>
-                        <p className="text-2xl font-bold text-stone-800">{avgTemp.toFixed(1)}°C</p>
+                        <p className="text-2xl font-bold text-stone-800">{avgTemp.toFixed(2)}°C</p>
                       </div>
                       <div className="text-center space-y-1 border-stone-200 md:border-x">
                         <p className="text-[10px] font-bold uppercase text-emerald-600/70 tracking-widest">Humidity</p>
-                        <p className="text-2xl font-bold text-stone-800">{avgHum.toFixed(1)}%</p>
+                        <p className="text-2xl font-bold text-stone-800">{avgHum.toFixed(2)}%</p>
                       </div>
                       <div className="text-center space-y-1">
                         <p className="text-[10px] font-bold uppercase text-emerald-600/70 tracking-widest">Ammonia Level (AMM)</p>
