@@ -124,43 +124,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
     }
   }, [history.length, isAuthReady, farmId]);
 
-  // Automated Hourly Logging logic
-  useEffect(() => {
-    if (!isAuthReady || !farmState) return;
-
-    const logCurrentHour = async () => {
-      const now = new Date();
-      const hourId = format(now, 'yyyy-MM-dd_HH');
-      
-      // I-check kung na-save na natin ang oras na ito
-      if (lastLoggedHour.current === hourId) return;
-
-      const docPath = `farms/${farmId}/history/hourly_${hourId}`;
-      const docRef = doc(db, docPath);
-      
-      try {
-        const docSnap = await getDoc(docRef);
-        lastLoggedHour.current = hourId;
-        
-        if (!docSnap.exists()) {
-          console.log(`[QuailSmart] Awtomatikong sine-save ang snapshot para sa ${hourId}`);
-          await setDoc(docRef, {
-            timestamp: now.toISOString(),
-            temperature: Number(farmState.temperature.toFixed(2)),
-            humidity: Number(farmState.humidity.toFixed(2)),
-            ammonia: Number(farmState.ammonia.toFixed(2))
-          });
-        }
-      } catch (error) {
-        console.error("Error logging hourly data:", error);
-      }
-    };
-
-    logCurrentHour();
-    // I-double check bawat 10 minuto kung kailangan na mag-log ng bagong oras
-    const interval = setInterval(logCurrentHour, 10 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, [isAuthReady, farmId, farmState?.temperature]); // Re-run if essential stats change to ensure we have fresh data
+  // Automated Hourly Logging moved to ESP32 for 24/7 reliability even when dashboard is closed.
 
 
   const toggleControl = async (key: keyof FarmControls) => {
