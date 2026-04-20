@@ -163,13 +163,17 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
   }, [isAuthReady, farmId, farmState?.temperature]); // Re-run if essential stats change to ensure we have fresh data
 
 
-  const toggleControl = async (key: keyof FarmState['controls']) => {
+  const toggleControl = async (key: keyof FarmControls) => {
     if (!farmState) return;
     try {
       const farmDoc = doc(db, 'farms', farmId);
+      // In this setup, "Manual is Boss". Toggling will set the state in Firestore,
+      // and the ESP32 will follow it immediately on next sync.
       await updateDoc(farmDoc, {
         [`controls.${key}`]: !farmState.controls[key]
       });
+      // We keep autoMode active if the user wants background help, 
+      // but the ESP32 knows to respect the current manual state.
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `farms/${farmId}`);
     }
@@ -411,8 +415,16 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
                 const value = farmState.controls[key];
                 const Icon = config.icon;
                 
+                // Fan, Heater, at Light ay disabled pag naka-Auto Mode.
+                // Feed at Cleaner ay laging enabled dahil jog buttons sila.
+                const isDisabled = farmState.autoMode && (key === 'fan' || key === 'heater' || key === 'light');
+                
                 return (
-                  <div key={key} className="flex flex-col gap-3 rounded-xl border border-stone-200 bg-white p-4 shadow-sm transition-all hover:border-emerald-200 hover:shadow-md">
+                  <div key={key} className={`flex flex-col gap-3 rounded-xl border p-4 shadow-sm transition-all ${
+                    isDisabled 
+                      ? 'border-stone-100 bg-stone-50/50 opacity-60' 
+                      : 'border-stone-200 bg-white hover:border-emerald-200 hover:shadow-md'
+                  }`}>
                     <div className="flex items-center justify-between">
                       <div className={`rounded-lg bg-stone-50 p-2 ${config.color}`}>
                         <Icon className="h-5 w-5" />
@@ -421,11 +433,11 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
                         id={key} 
                         checked={value} 
                         onCheckedChange={() => toggleControl(key)} 
-                        disabled={farmState.autoMode}
+                        disabled={isDisabled}
                       />
                     </div>
                     <div>
-                      <Label htmlFor={key} className="text-sm font-bold text-stone-700">{config.label}</Label>
+                      <Label htmlFor={key} className={`text-sm font-bold ${isDisabled ? 'text-stone-400' : 'text-stone-700'}`}>{config.label}</Label>
                       <p className="text-[10px] text-stone-400 uppercase tracking-wider font-medium">
                         {value ? 'Active' : 'Inactive'}
                       </p>
