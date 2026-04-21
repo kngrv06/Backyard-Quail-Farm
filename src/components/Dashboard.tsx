@@ -52,6 +52,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
   useEffect(() => {
     if (user) {
       setIsAuthReady(true);
+      
       // Check if we need to seed
       getDoc(doc(db, 'farms', farmId)).then(snap => {
         if (!snap.exists()) {
