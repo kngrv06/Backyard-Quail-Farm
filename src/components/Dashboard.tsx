@@ -43,6 +43,10 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
   const [farmState, setFarmState] = useState<FarmState | null>(null);
   const [automation, setAutomation] = useState<AutomationSettings | null>(null);
   const [history, setHistory] = useState<SensorHistory[]>([]);
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission>(
+    typeof Notification !== 'undefined' ? Notification.permission : 'default'
+  );
+  const lastNotifiedRef = useRef<{ [key: string]: number }>({});
   const [dailyAverages, setDailyAverages] = useState<any[]>([]);
   const [isAuthReady, setIsAuthReady] = useState(false);
 
@@ -165,6 +169,72 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
     }
   };
 
+  const requestNotifPermission = async () => {
+    if (typeof Notification === 'undefined') return;
+    const permission = await Notification.requestPermission();
+    setNotifPermission(permission);
+    if (permission === 'granted') {
+      new Notification("Quail Farm Alerts Enabled", {
+        body: "You will now receive alerts for critical farm conditions.",
+        icon: "/favicon.ico"
+      });
+    }
+  };
+
+  useEffect(() => {
+    if (!farmState || notifPermission !== 'granted') return;
+
+    const now = Date.now();
+    const cooldown = 5 * 60 * 1000; // 5 minutes cooldown per alert type
+
+    const checkAndNotify = (key: string, title: string, body: string, condition: boolean) => {
+      if (condition) {
+        const lastAlert = lastNotifiedRef.current[key] || 0;
+        if (now - lastAlert > cooldown) {
+          new Notification(title, { body, icon: "/favicon.ico" });
+          lastNotifiedRef.current[key] = now;
+        }
+      }
+    };
+
+    checkAndNotify(
+      'temp_high',
+      '⚠️ High Temperature Alert',
+      `Current temperature is ${farmState.temperature.toFixed(1)}°C. Fans are working!`,
+      farmState.temperature > 27
+    );
+
+    checkAndNotify(
+      'temp_low',
+      '❄️ Low Temperature Alert',
+      `Current temperature is ${farmState.temperature.toFixed(1)}°C. Heater is on!`,
+      farmState.temperature < 18
+    );
+
+    checkAndNotify(
+      'amm_high',
+      '⚠️ Ammonia Alert',
+      `Ammonia level is critical: ${farmState.ammonia.toFixed(0)} AMM.`,
+      farmState.ammonia > 1500
+    );
+
+    const lowFeeds = [
+      { id: 1, val: farmState.feedLevel },
+      { id: 2, val: farmState.feedLevel2 },
+      { id: 3, val: farmState.feedLevel3 }
+    ].filter(f => f.val <= 10);
+
+    if (lowFeeds.length > 0) {
+      const ids = lowFeeds.map(f => f.id).join(', ');
+      checkAndNotify(
+        'feed_low',
+        '🥣 Low Feed Level',
+        `Feeder(s) ${ids} are reaching critical levels!`,
+        true
+      );
+    }
+  }, [farmState, notifPermission]);
+
   const logManualReading = async () => {
     if (!farmState) return;
     const now = new Date();
@@ -216,8 +286,14 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
             <Label htmlFor="auto-mode" className="text-xs font-bold uppercase tracking-wider text-stone-500">Auto Mode</Label>
             <Switch id="auto-mode" checked={farmState.autoMode} onCheckedChange={toggleAutoMode} />
           </div>
-          <Button variant="outline" size="sm" className="rounded-full">
-            <Bell className="mr-2 h-4 w-4" /> Enable Notifications
+          <Button 
+            variant={notifPermission === 'granted' ? "secondary" : "outline"} 
+            size="sm" 
+            className="rounded-full"
+            onClick={requestNotifPermission}
+          >
+            <Bell className={`mr-2 h-4 w-4 ${notifPermission === 'granted' ? "fill-emerald-500 text-emerald-500" : ""}`} /> 
+            {notifPermission === 'granted' ? "Notifications Active" : "Enable Notifications"}
           </Button>
           <div className="flex items-center gap-3 border-l pl-4 border-stone-200">
             <div className="text-right">
@@ -271,17 +347,13 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
             'Optimal'
           }
         />
-        <SensorCard 
-          title="Feed Level" 
-          value={farmState.feedLevel} 
-          unit="%" 
-          precision={0}
-          icon={<Database className="h-5 w-5" />} 
-          status={
-            farmState.feedLevel <= 10 ? 'Critical' :
-            farmState.feedLevel <= 20 ? 'Warning' :
-            'Optimal'
-          }
+        <MultiFeedCard 
+          farmState={farmState}
+          feeds={[
+            { id: 1, value: farmState.feedLevel },
+            { id: 2, value: farmState.feedLevel2 },
+            { id: 3, value: farmState.feedLevel3 },
+          ]} 
         />
       </div>
 
@@ -382,7 +454,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
                 
                 // Fan, Heater, at Light ay disabled pag naka-Auto Mode.
                 // Feed at Cleaner ay laging enabled dahil jog buttons sila.
-                const isDisabled = farmState.autoMode && (key === 'fan' || key === 'heater' || key === 'light');
+                const isDisabled = farmState.autoMode;
                 
                 return (
                   <div key={key} className={`flex flex-col gap-3 rounded-xl border p-4 shadow-sm transition-all ${
@@ -439,6 +511,44 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       {/* Farm History Section */}
       <FarmHistory history={history} />
     </div>
+  );
+}
+
+function MultiFeedCard({ feeds, farmState }: { feeds: { id: number, value: number }[], farmState: FarmState }) {
+  return (
+    <Card className="border-stone-200 shadow-sm transition-all hover:shadow-md col-span-1 sm:col-span-2 lg:col-span-1">
+      <CardContent className="p-6">
+        <div className="flex items-center justify-between">
+          <div className="rounded-full bg-stone-100 p-2 text-stone-600"><Database className="h-5 w-5" /></div>
+          <span className="text-[10px] font-bold uppercase tracking-widest text-stone-400">Inventory Status</span>
+        </div>
+        <div className="mt-4 space-y-6">
+          <p className="text-xs font-bold uppercase tracking-wider text-stone-400">FEED LEVEL</p>
+          
+          {feeds.map((feed, idx) => {
+            const status = feed.value <= 10 ? 'Critical' : feed.value <= 20 ? 'Warning' : 'Optimal';
+            const statusColor = status === 'Optimal' ? 'text-green-600' : status === 'Warning' ? 'text-amber-600' : 'text-red-600';
+            const rawDist = [farmState?.feedRaw1, farmState?.feedRaw2, farmState?.feedRaw3][idx];
+            
+            return (
+              <div key={feed.id} className="space-y-1.5">
+                <div className="flex items-center justify-between text-[10px] font-bold uppercase">
+                  <span className="text-stone-500">Feeder {feed.id}</span>
+                  <span className={statusColor}>{feed.value.toFixed(0)}% • {status}</span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-stone-100">
+                  <motion.div 
+                    initial={{ width: 0 }}
+                    animate={{ width: `${Math.min(feed.value, 100)}%` }}
+                    className={`h-full transition-all duration-500 ${statusColor.replace('text', 'bg')}`}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

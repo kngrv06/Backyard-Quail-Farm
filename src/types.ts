@@ -64,6 +64,11 @@ export interface FarmState {
   humidity: number;
   ammonia: number;
   feedLevel: number;
+  feedLevel2: number;
+  feedLevel3: number;
+  feedRaw1?: number;
+  feedRaw2?: number;
+  feedRaw3?: number;
   lastUpdate: string;
   controls: FarmControls;
   autoMode: boolean;

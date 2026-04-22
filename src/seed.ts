@@ -26,7 +26,9 @@ export async function seedFarmData() {
     temperature: 28.5,
     humidity: 60,
     ammonia: 150,
-    feedLevel: 75,
+    feedLevel: 0,
+    feedLevel2: 0,
+    feedLevel3: 50,
     lastUpdate: new Date().toISOString(),
     autoMode: true,
     controls: {

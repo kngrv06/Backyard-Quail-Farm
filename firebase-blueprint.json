@@ -8,7 +8,9 @@
         "temperature": { "type": "number", "description": "Current temperature in Celsius" },
         "humidity": { "type": "number", "description": "Current humidity percentage" },
         "ammonia": { "type": "number", "description": "Current ammonia level (raw or ppm)" },
-        "feedLevel": { "type": "number", "description": "Current feed level percentage" },
+        "feedLevel": { "type": "number", "description": "Current feed level 1 percentage" },
+        "feedLevel2": { "type": "number", "description": "Current feed level 2 percentage" },
+        "feedLevel3": { "type": "number", "description": "Current feed level 3 percentage" },
         "lastUpdate": { "type": "string", "format": "date-time", "description": "Timestamp of last sensor update" },
         "controls": {
           "type": "object",
