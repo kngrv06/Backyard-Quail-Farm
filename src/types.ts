@@ -87,3 +87,11 @@ export interface SensorHistory {
   humidity: number;
   ammonia: number;
 }
+
+export interface NotificationLog {
+  id: string;
+  timestamp: string;
+  title: string;
+  message: string;
+  type: 'alert' | 'status' | 'info';
+}

@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { doc, onSnapshot, updateDoc, getDoc, collection, query, orderBy, limit, writeBatch, addDoc, setDoc } from 'firebase/firestore';
 import { db } from '../firebase';
-import { FarmState, AutomationSettings, SensorHistory, OperationType, handleFirestoreError, FarmControls } from '../types';
+import { FarmState, AutomationSettings, SensorHistory, OperationType, handleFirestoreError, FarmControls, NotificationLog } from '../types';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card';
 import { Button } from './ui/button';
 import { Switch } from './ui/switch';
 import { Label } from './ui/label';
 import { Badge } from './ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
-import { Thermometer, Droplets, Wind, Database, Power, Settings, LogOut, Cpu, Bell, History, BarChart3, Upload, Loader2, CheckCircle2, AlertTriangle, Printer, FileText, Sun, Sparkles, Utensils, Flame } from 'lucide-react';
+import { Thermometer, Droplets, Wind, Database, Power, Settings, LogOut, Cpu, Bell, History, BarChart3, Upload, Loader2, CheckCircle2, AlertTriangle, Printer, FileText, Sun, Sparkles, Utensils, Flame, Terminal } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, BarChart, Bar } from 'recharts';
 import { format, isValid } from 'date-fns';
 
@@ -30,8 +30,8 @@ const CONTROL_CONFIG = [
   { key: 'fan', label: 'Exhaust Fan', icon: Wind, color: 'text-blue-500' },
   { key: 'heater', label: 'Heater System', icon: Flame, color: 'text-orange-500' },
   { key: 'light', label: 'Farm Lighting', icon: Sun, color: 'text-yellow-500' },
-  { key: 'cleaner', label: 'Waste Cleaner', icon: Sparkles, color: 'text-purple-500' },
-  { key: 'feed', label: 'Feed', icon: Utensils, color: 'text-emerald-500' },
+  { key: 'cleaner', label: 'Manual Clean (Stool)', icon: Sparkles, color: 'text-purple-500' },
+  { key: 'feed', label: 'Manual Feed', icon: Utensils, color: 'text-emerald-500' },
 ] as const;
 
 interface DashboardProps {
@@ -43,10 +43,12 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
   const [farmState, setFarmState] = useState<FarmState | null>(null);
   const [automation, setAutomation] = useState<AutomationSettings | null>(null);
   const [history, setHistory] = useState<SensorHistory[]>([]);
+  const [notifHistory, setNotifHistory] = useState<NotificationLog[]>([]);
   const [notifPermission, setNotifPermission] = useState<NotificationPermission>(
     typeof Notification !== 'undefined' ? Notification.permission : 'default'
   );
   const lastNotifiedRef = useRef<{ [key: string]: number }>({});
+  const lastControlsRef = useRef<FarmControls | null>(null);
   const [dailyAverages, setDailyAverages] = useState<any[]>([]);
   const [isAuthReady, setIsAuthReady] = useState(false);
 
@@ -134,15 +136,31 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 
   const toggleControl = async (key: keyof FarmControls) => {
     if (!farmState) return;
+    
+    // Restricted controls in Auto Mode
+    if (farmState.autoMode) {
+      addNotifLog("Restricted Action", "Manual controls are disabled while Auto Mode is active.", 'info');
+      return;
+    }
+
     try {
       const farmDoc = doc(db, 'farms', farmId);
-      // In this setup, "Manual is Boss". Toggling will set the state in Firestore,
-      // and the ESP32 will follow it immediately on next sync.
+      // Special logic for "Jog" buttons (Feed and Cleaner)
+      // These are one-time triggers. The ESP32 will reset them once the task is complete.
+      const isJogAction = key === 'feed' || key === 'cleaner';
+      const newValue = !farmState.controls[key];
+
       await updateDoc(farmDoc, {
-        [`controls.${key}`]: !farmState.controls[key]
+        [`controls.${key}`]: newValue
       });
-      // We keep autoMode active if the user wants background help, 
-      // but the ESP32 knows to respect the current manual state.
+
+      if (isJogAction && newValue) {
+        addNotifLog(
+          key === 'feed' ? "Feeding Initiated" : "Cleaning Initiated",
+          `Device will perform the action and reset automatically.`,
+          'status'
+        );
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `farms/${farmId}`);
     }
@@ -169,54 +187,70 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
     }
   };
 
+  const addNotifLog = (title: string, message: string, type: 'alert' | 'status' | 'info' = 'info') => {
+    const newLog: NotificationLog = {
+      id: Math.random().toString(36).substr(2, 9),
+      timestamp: new Date().toISOString(),
+      title,
+      message,
+      type
+    };
+    setNotifHistory(prev => [newLog, ...prev].slice(0, 50));
+    
+    if (notifPermission === 'granted') {
+      new Notification(title, { body: message, icon: "/favicon.ico" });
+    }
+  };
+
   const requestNotifPermission = async () => {
     if (typeof Notification === 'undefined') return;
     const permission = await Notification.requestPermission();
     setNotifPermission(permission);
     if (permission === 'granted') {
-      new Notification("Quail Farm Alerts Enabled", {
-        body: "You will now receive alerts for critical farm conditions.",
-        icon: "/favicon.ico"
-      });
+      addNotifLog("Notifications Enabled", "You will now receive real-time alerts.", "info");
     }
   };
 
   useEffect(() => {
-    if (!farmState || notifPermission !== 'granted') return;
+    if (!farmState) return;
 
+    // Detect control changes for notifications
+    if (lastControlsRef.current) {
+      const prev = lastControlsRef.current;
+      const curr = farmState.controls;
+      const timeStr = format(new Date(), 'hh:mm a');
+
+      if (curr.feed && !prev.feed) addNotifLog("Feed Active", `Feeding system started at ${timeStr}`, 'status');
+      if (!curr.feed && prev.feed) addNotifLog("Feed Stopped", `Feeding system finished at ${timeStr}`, 'status');
+      
+      if (curr.cleaner && !prev.cleaner) addNotifLog("Waste Cleaner Active", `Waste cleaner started at ${timeStr}`, 'status');
+      if (!curr.cleaner && prev.cleaner) addNotifLog("Waste Cleaner Stopped", `Waste cleaner finished at ${timeStr}`, 'status');
+
+      if (curr.fan && !prev.fan) addNotifLog("Fans Active", `Exhaust fans turned on at ${timeStr}`, 'status');
+      if (!curr.fan && prev.fan) addNotifLog("Fans Stopped", `Exhaust fans turned off at ${timeStr}`, 'status');
+
+      if (curr.heater && !prev.heater) addNotifLog("Heater Active", `Heating system turned on at ${timeStr}`, 'status');
+      if (!curr.heater && prev.heater) addNotifLog("Heater Stopped", `Heating system turned off at ${timeStr}`, 'status');
+    }
+    lastControlsRef.current = farmState.controls;
+
+    // Critical Alerts
     const now = Date.now();
-    const cooldown = 5 * 60 * 1000; // 5 minutes cooldown per alert type
+    const cooldown = 5 * 60 * 1000;
 
     const checkAndNotify = (key: string, title: string, body: string, condition: boolean) => {
       if (condition) {
         const lastAlert = lastNotifiedRef.current[key] || 0;
         if (now - lastAlert > cooldown) {
-          new Notification(title, { body, icon: "/favicon.ico" });
+          addNotifLog(title, body, 'alert');
           lastNotifiedRef.current[key] = now;
         }
       }
     };
 
-    checkAndNotify(
-      'temp_high',
-      '⚠️ High Temperature Alert',
-      `Current temperature is ${farmState.temperature.toFixed(1)}°C. Fans are working!`,
-      farmState.temperature > 27
-    );
-
-    checkAndNotify(
-      'temp_low',
-      '❄️ Low Temperature Alert',
-      `Current temperature is ${farmState.temperature.toFixed(1)}°C. Heater is on!`,
-      farmState.temperature < 18
-    );
-
-    checkAndNotify(
-      'amm_high',
-      '⚠️ Ammonia Alert',
-      `Ammonia level is critical: ${farmState.ammonia.toFixed(0)} AMM.`,
-      farmState.ammonia > 1500
-    );
+    checkAndNotify('temp_high', '⚠️ High Temperature', `Temperature is ${farmState.temperature.toFixed(1)}°C!`, farmState.temperature > 27);
+    checkAndNotify('temp_low', '❄️ Low Temperature', `Temperature is ${farmState.temperature.toFixed(1)}°C!`, farmState.temperature < 18);
+    checkAndNotify('amm_high', '⚠️ Ammonia Alert', `Ammonia level critical: ${farmState.ammonia.toFixed(0)} AMM`, farmState.ammonia > 1500);
 
     const lowFeeds = [
       { id: 1, val: farmState.feedLevel },
@@ -226,18 +260,20 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 
     if (lowFeeds.length > 0) {
       const ids = lowFeeds.map(f => f.id).join(', ');
-      checkAndNotify(
-        'feed_low',
-        '🥣 Low Feed Level',
-        `Feeder(s) ${ids} are reaching critical levels!`,
-        true
-      );
+      checkAndNotify('feed_low', '🥣 Low Feed Level', `Feeder(s) ${ids} are low!`, true);
     }
-  }, [farmState, notifPermission]);
+  }, [farmState]);
 
   const logManualReading = async () => {
     if (!farmState) return;
     const now = new Date();
+    
+    // Hourly Check for trends logging
+    const currentHour = now.getHours() + ":00";
+    if (lastLoggedHour.current !== currentHour) {
+      addNotifLog("History Snapshot", `Automated sensor trend saved at ${currentHour}`, 'info');
+      // Continue with log logic...
+    }
     const docId = `manual_${now.getTime()}`;
     const docRef = doc(db, `farms/${farmId}/history/${docId}`);
     
@@ -452,8 +488,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
                 const value = farmState.controls[key];
                 const Icon = config.icon;
                 
-                // Fan, Heater, at Light ay disabled pag naka-Auto Mode.
-                // Feed at Cleaner ay laging enabled dahil jog buttons sila.
+                // Manual controls are disabled when Auto Mode is active.
                 const isDisabled = farmState.autoMode;
                 
                 return (
@@ -510,6 +545,67 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
 
       {/* Farm History Section */}
       <FarmHistory history={history} />
+
+      {/* System Notification Terminal - Moved to Bottom */}
+      <div className="mt-8">
+        <Card className="border-stone-800 bg-stone-950 text-stone-300 shadow-2xl overflow-hidden font-mono">
+          <CardHeader className="border-b border-stone-800 bg-stone-900/50 py-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="flex gap-1.5">
+                  <div className="h-3 w-3 rounded-full bg-red-500/50" />
+                  <div className="h-3 w-3 rounded-full bg-amber-500/50" />
+                  <div className="h-3 w-3 rounded-full bg-emerald-500/50" />
+                </div>
+                <CardTitle className="text-sm font-bold text-stone-400">System Notification Terminal</CardTitle>
+              </div>
+              <div className="flex items-center gap-4">
+                <Badge variant="outline" className="border-stone-700 text-[10px] text-stone-500 uppercase tracking-widest">
+                  {notifHistory.length} events logged
+                </Badge>
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  className="h-6 w-6 text-stone-600 hover:text-stone-300"
+                  onClick={() => setNotifHistory([])}
+                  title="Clear Logs"
+                >
+                  <History className="h-3 w-3" />
+                </Button>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="h-[400px] overflow-y-auto p-4 space-y-2 scrollbar-thin scrollbar-thumb-stone-800">
+              {notifHistory.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-stone-600 italic">
+                  No system events logged yet...
+                </div>
+              ) : (
+                notifHistory.map((log) => (
+                  <div key={log.id} className="group flex gap-3 text-xs leading-relaxed border-l-2 border-transparent pl-2 hover:border-emerald-500/50 hover:bg-stone-900/50 transition-colors py-1">
+                    <span className="shrink-0 text-stone-600">[{format(new Date(log.timestamp), 'HH:mm:ss')}]</span>
+                    <div className="space-x-2">
+                      <span className={`font-bold uppercase tracking-wider ${
+                        log.type === 'alert' ? 'text-red-400' : 
+                        log.type === 'status' ? 'text-emerald-400' : 
+                        'text-blue-400'
+                      }`}>
+                        {log.title}:
+                      </span>
+                      <span className="text-stone-400">{log.message}</span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="border-t border-stone-800 bg-stone-900/50 p-2 text-[10px] text-stone-600 flex justify-between">
+              <span>SYSTEM READY // KERNEL v2.1.0</span>
+              <span>AUTHENTICATED AS {user.email?.toUpperCase()}</span>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
