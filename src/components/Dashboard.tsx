@@ -53,7 +53,6 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
   const [isAuthReady, setIsAuthReady] = useState(false);
 
   const farmId = "main-farm";
-  const lastLoggedHour = useRef<string | null>(null);
 
   useEffect(() => {
     if (user) {
@@ -120,20 +119,8 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
     };
   }, [isAuthReady]);
 
-  useEffect(() => {
-    if (isAuthReady) {
-      const hasOldestData = history.some(h => h.timestamp.startsWith('2026-03-30'));
-      // If we don't have the oldest data, we should probably seed.
-      // We'll remove the length check to be more aggressive for now.
-      if (!hasOldestData) {
-        generateSimulatedHistory(farmId);
-      }
-    }
-  }, [history.length, isAuthReady, farmId]);
-
-  // Automated Hourly Logging moved to ESP32 for 24/7 reliability even when dashboard is closed.
-
-
+  // Simulated data generation removed to ensure only real data from ESP32 is shown.
+  
   const toggleControl = async (key: keyof FarmControls) => {
     if (!farmState) return;
     
@@ -263,32 +250,6 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       checkAndNotify('feed_low', '🥣 Low Feed Level', `Feeder(s) ${ids} are low!`, true);
     }
   }, [farmState]);
-
-  const logManualReading = async () => {
-    if (!farmState) return;
-    const now = new Date();
-    
-    // Hourly Check for trends logging
-    const currentHour = now.getHours() + ":00";
-    if (lastLoggedHour.current !== currentHour) {
-      addNotifLog("History Snapshot", `Automated sensor trend saved at ${currentHour}`, 'info');
-      // Continue with log logic...
-    }
-    const docId = `manual_${now.getTime()}`;
-    const docRef = doc(db, `farms/${farmId}/history/${docId}`);
-    
-    try {
-      await setDoc(docRef, {
-        timestamp: now.toISOString(),
-        temperature: Number(farmState.temperature.toFixed(1)),
-        humidity: Number(farmState.humidity.toFixed(1)),
-        ammonia: Number(farmState.ammonia.toFixed(2))
-      });
-      console.log("[ManualLog] Snapshot saved.");
-    } catch (error) {
-      console.error("Error saving manual log:", error);
-    }
-  };
 
   if (!farmState) {
     return (
