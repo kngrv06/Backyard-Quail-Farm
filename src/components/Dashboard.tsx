@@ -19,7 +19,6 @@ const safeFormat = (dateStr: string | undefined | null, formatStr: string, fallb
   return format(date, formatStr);
 };
 import { motion, AnimatePresence } from 'motion/react';
-import { seedFarmData, generateSimulatedHistory, clearHistory } from '../seed';
 import { User } from 'firebase/auth';
 import Papa from 'papaparse';
 import firebaseConfig from '../../firebase-applet-config.json';
@@ -57,13 +56,6 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
   useEffect(() => {
     if (user) {
       setIsAuthReady(true);
-      
-      // Check if we need to seed
-      getDoc(doc(db, 'farms', farmId)).then(snap => {
-        if (!snap.exists()) {
-          seedFarmData();
-        }
-      });
     }
   }, [user]);
 
@@ -807,24 +799,6 @@ function FarmHistory({ history }: { history: SensorHistory[] }) {
       setSelectedDay(sortedDays[0]);
     }
   }, [sortedDays, selectedDay]);
-
-  const handleResetAndSync = async () => {
-    setIsSyncing(true);
-    try {
-      // Clear duplicates in multiple passes to handle large amounts
-      await clearHistory(farmId);
-      await clearHistory(farmId);
-      await clearHistory(farmId);
-      // Then seed with deterministic IDs
-      await generateSimulatedHistory(farmId);
-      alert("Data reset and synced successfully! If some dates are still missing, try clicking 'Reset & Sync' one more time.");
-    } catch (error) {
-      console.error("Sync error:", error);
-      alert("There was an error syncing data. Please check your connection.");
-    } finally {
-      setIsSyncing(false);
-    }
-  };
 
   return (
     <div className="space-y-6 print:m-0 print:p-0">
