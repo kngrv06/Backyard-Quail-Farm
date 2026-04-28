@@ -29,8 +29,8 @@ const CONTROL_CONFIG = [
   { key: 'fan', label: 'Exhaust Fan', icon: Wind, color: 'text-blue-500' },
   { key: 'heater', label: 'Heater System', icon: Flame, color: 'text-orange-500' },
   { key: 'light', label: 'Farm Lighting', icon: Sun, color: 'text-yellow-500' },
-  { key: 'cleaner', label: 'Manual Clean (Stool)', icon: Sparkles, color: 'text-purple-500' },
-  { key: 'feed', label: 'Manual Feed', icon: Utensils, color: 'text-emerald-500' },
+  { key: 'cleaner', label: 'Clean Waste', icon: Sparkles, color: 'text-purple-500' },
+  { key: 'feed', label: 'Feed', icon: Utensils, color: 'text-emerald-500' },
 ] as const;
 
 interface DashboardProps {
@@ -52,6 +52,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
   const [isAuthReady, setIsAuthReady] = useState(false);
 
   const farmId = "main-farm";
+  const isStale = farmState?.lastUpdate ? (Date.now() - new Date(farmState.lastUpdate).getTime() > 5 * 60 * 1000) : true;
 
   useEffect(() => {
     if (user) {
@@ -76,18 +77,19 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       }
     }, (error) => handleFirestoreError(error, OperationType.GET, `farms/${farmId}/settings/automation`));
 
-    // Hourly History (Last 24 hours)
+    // Hourly History (Last week: 24 * 7 = 168, setting to 300 to be safe)
     const historyQuery = query(
       collection(db, 'farms', farmId, 'history'),
       orderBy('timestamp', 'desc'),
-      limit(5000)
+      limit(300)
     );
     const unsubHistory = onSnapshot(historyQuery, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as SensorHistory));
-      const sortedData = data.reverse();
+      // Sort for chart display (chronological)
+      const sortedData = [...data].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
       setHistory(sortedData);
 
-      // Calculate Daily Averages from the history data
+      // Group and Calculate Daily Averages
       const days: { [key: string]: any[] } = {};
       sortedData.forEach(entry => {
         const day = safeFormat(entry.timestamp, 'yyyy-MM-dd', 'Unknown');
@@ -100,7 +102,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         temperature: entries.reduce((acc, curr) => acc + curr.temperature, 0) / entries.length,
         humidity: entries.reduce((acc, curr) => acc + curr.humidity, 0) / entries.length,
         ammonia: entries.reduce((acc, curr) => acc + curr.ammonia, 0) / entries.length,
-      }));
+      })).slice(-7); // Keep last 7 days
       setDailyAverages(averages);
     }, (error) => handleFirestoreError(error, OperationType.GET, `farms/${farmId}/history`));
 
@@ -235,7 +237,7 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
       { id: 1, val: farmState.feedLevel },
       { id: 2, val: farmState.feedLevel2 },
       { id: 3, val: farmState.feedLevel3 }
-    ].filter(f => f.val <= 10);
+    ].filter(f => f.val <= 20);
 
     if (lowFeeds.length > 0) {
       const ids = lowFeeds.map(f => f.id).join(', ');
@@ -262,15 +264,25 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-stone-900">Backyard Quail Farm</h1>
           <div className="mt-1 flex items-center gap-2">
-            <Badge variant={farmState.lastUpdate ? "outline" : "destructive"} className="bg-white">
-              {farmState.lastUpdate ? '● ONLINE' : '● OFFLINE / ERROR'}
+            <Badge 
+              variant={isStale ? "destructive" : "outline"} 
+              className={isStale ? "" : "bg-white text-emerald-600 border-emerald-200"}
+            >
+              {isStale ? '● OFFLINE / STALE' : '● ONLINE'}
             </Badge>
-            <span className="text-xs text-stone-500">
-              Last Update: {safeFormat(farmState.lastUpdate, 'PPpp', 'Never')}
+            <span className={`text-xs font-medium ${isStale ? "text-red-500 animate-pulse" : "text-stone-500"}`}>
+              {isStale ? '⚠️ Connection Lost: ' : 'Last Update: '}
+              {safeFormat(farmState.lastUpdate, 'PPpp', 'Never')}
             </span>
           </div>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-4">
+          {isStale && (
+            <div className="flex items-center gap-2 rounded-lg bg-red-50 px-3 py-1 text-[10px] font-bold text-red-600 border border-red-100">
+              <AlertTriangle className="h-3 w-3" />
+              ESP32 NOT SYNCING
+            </div>
+          )}
           <div className="flex items-center gap-2 rounded-full bg-white px-4 py-2 shadow-sm border border-stone-200">
             <Label htmlFor="auto-mode" className="text-xs font-bold uppercase tracking-wider text-stone-500">Auto Mode</Label>
             <Switch id="auto-mode" checked={farmState.autoMode} onCheckedChange={toggleAutoMode} />
@@ -408,13 +420,13 @@ export default function Dashboard({ user, onLogout }: DashboardProps) {
               <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Feed Level</p>
               <div className="space-y-1.5">
                 <div className="flex items-center gap-2 text-[11px] font-medium text-green-600">
-                  <CheckCircle2 className="h-3.5 w-3.5" /> Optimal: Above 20%
+                  <CheckCircle2 className="h-3.5 w-3.5" /> Optimal: Above 50%
                 </div>
                 <div className="flex items-center gap-2 text-[11px] font-medium text-amber-600">
-                  <AlertTriangle className="h-3.5 w-3.5" /> Warning: 10% – 20%
+                  <AlertTriangle className="h-3.5 w-3.5" /> Warning: 20% – 50%
                 </div>
                 <div className="flex items-center gap-2 text-[11px] font-medium text-red-600">
-                  <Bell className="h-3.5 w-3.5 fill-red-100" /> Critical: Below 10%
+                  <Bell className="h-3.5 w-3.5 fill-red-100" /> Critical: 20% and Below
                 </div>
               </div>
             </div>
@@ -575,7 +587,7 @@ function MultiFeedCard({ feeds, farmState }: { feeds: { id: number, value: numbe
           <p className="text-xs font-bold uppercase tracking-wider text-stone-400">FEED LEVEL</p>
           
           {feeds.map((feed, idx) => {
-            const status = feed.value <= 10 ? 'Critical' : feed.value <= 20 ? 'Warning' : 'Optimal';
+            const status = feed.value <= 20 ? 'Critical' : feed.value <= 50 ? 'Warning' : 'Optimal';
             const statusColor = status === 'Optimal' ? 'text-green-600' : status === 'Warning' ? 'text-amber-600' : 'text-red-600';
             const rawDist = [farmState?.feedRaw1, farmState?.feedRaw2, farmState?.feedRaw3][idx];
             
